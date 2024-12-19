@@ -1,0 +1,26 @@
+rules:
+  - under_no_circumstances:
+      description: Do not modify Safe core contracts.
+  - interact_via_endpoints:
+      description: All interactions with Safe must use the provided endpoints and APIs.
+  - consistent_tech_stack:
+      description: Follow the tech stack used in Safe-smart-account and Safe-modules.
+  - windows_compatibility:
+      description: Ensure all code is compatible with Windows and PowerShell terminal.
+  - test_separation:
+      description: Keep unit tests and integration tests separate, and mock dependencies in a separate suite if needed.
+  - context_limitation:
+      description: Only consider files in the current module directory and include external references only when necessary.
+  - solidity_best_practices:
+      description: Adhere to Solidity best practices, including:
+        - Avoid reentrancy vulnerabilities.
+        - Use `require` statements for input validation.
+        - Optimize gas usage.
+        - Favor readability and maintainability in contract code.
+  - api_documentation:
+      description: Generate API documentation using tools like Swagger or OpenAPI and ensure it is kept up-to-date.
+  - code_comments:
+      description: Write clear and comprehensive comments for all critical code sections to improve readability and maintainability.
+  - module_development:
+      description: Develop the Automation Module in a new subproject under the project root, separate from `safe-modules` and `safe-smart-account`.
+      
