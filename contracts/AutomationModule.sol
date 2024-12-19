@@ -4,106 +4,104 @@ pragma solidity ^0.8.19;
 import "@gnosis.pm/safe-contracts/contracts/base/ModuleManager.sol";
 import "@gnosis.pm/safe-contracts/contracts/common/Enum.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@gnosis.pm/safe-contracts/contracts/GnosisSafe.sol";
 import "../interfaces/IAutomationModule.sol";
-import "../interfaces/IStrategyValidationService.sol";
-import "../interfaces/ISafeGuard.sol";
+import "./ValidationHelper.sol";
 
+/**
+ * @title AutomationModule
+ * @dev A Safe module for executing validated transaction plans from whitelisted strategists
+ */
 contract AutomationModule is IAutomationModule, Ownable {
     // State variables
     mapping(address => bool) public whitelistedStrategists;
     mapping(bytes32 => bool) public usedAuthTokens;
-    IStrategyValidationService public validationService;
-    ISafeGuard public safeGuard;
-    address public safeModifier;
-    
-    // Events
-    event TransactionSubmitted(bytes32 indexed transactionId, address indexed strategist);
-    event TransactionExecuted(bytes32 indexed transactionId, bool success);
-    event WhitelistUpdated(address indexed strategist, bool status);
-    
-    constructor(
-        address _validationService,
-        address _safeGuard,
-        address _safeModifier
-    ) {
-        require(_validationService != address(0), "Invalid validation service address");
-        require(_safeGuard != address(0), "Invalid safe guard address");
-        require(_safeModifier != address(0), "Invalid safe modifier address");
-        
-        validationService = IStrategyValidationService(_validationService);
-        safeGuard = ISafeGuard(_safeGuard);
-        safeModifier = _safeModifier;
+    GnosisSafe public safe;
+    ValidationHelper public validationHelper;
+
+    /**
+     * @dev Constructor sets the validation service address and Safe instance
+     * @param _safe Address of the Safe this module is attached to
+     * @param _validationHelper Address of the ValidationHelper contract
+     */
+    constructor(address payable _safe, address _validationHelper) {
+        require(_safe != address(0), "Invalid Safe address");
+        require(_validationHelper != address(0), "Invalid validation helper address");
+        safe = GnosisSafe(_safe);
+        validationHelper = ValidationHelper(_validationHelper);
     }
-    
+
+    /**
+     * @dev Modifier to restrict access to whitelisted strategists
+     */
     modifier onlyWhitelistedStrategist() {
         require(whitelistedStrategists[msg.sender], "Caller is not a whitelisted strategist");
         _;
     }
-    
+
+    /**
+     * @dev Submit a transaction plan for execution
+     * @param plan The transaction plan to execute
+     * @param authToken Authentication token from the validation service
+     * @return transactionId Unique identifier for the transaction
+     */
     function submitTransactionPlan(
         TransactionPlan calldata plan,
         AuthToken calldata authToken
     ) external override onlyWhitelistedStrategist returns (bytes32) {
-        // Validate auth token
-        require(validateAuthToken(authToken), "Invalid authentication token");
+        require(!usedAuthTokens[authToken.tokenId], "Auth token already used");
+        require(authToken.validUntil > block.timestamp, "Auth token expired");
+        require(authToken.strategist == msg.sender, "Invalid strategist");
         
-        // Generate transaction ID
+        require(
+            validationHelper.verifyValidationToken(authToken, plan, msg.sender),
+            "Invalid validation token"
+        );
+
         bytes32 transactionId = keccak256(abi.encode(plan, block.timestamp, msg.sender));
-        
-        // Mark auth token as used
         usedAuthTokens[authToken.tokenId] = true;
-        
-        // Forward transaction to Safe
+
         bool success = forwardTransactionToSafe(transactionId, plan);
         require(success, "Transaction forwarding failed");
-        
+
         emit TransactionSubmitted(transactionId, msg.sender);
         return transactionId;
     }
-    
-    function validateAuthToken(AuthToken calldata token) public view returns (bool) {
-        require(!usedAuthTokens[token.tokenId], "Auth token already used");
-        require(token.validUntil > block.timestamp, "Auth token expired");
-        require(token.issuedBy == address(validationService), "Invalid token issuer");
-        
-        return validationService.verifyToken(token);
-    }
-    
+
+    /**
+     * @dev Forward validated transactions to Safe for execution
+     * @param transactionId Unique identifier for the transaction
+     * @param plan The transaction plan to execute
+     * @return bool indicating if the forwarding was successful
+     */
     function forwardTransactionToSafe(
         bytes32 transactionId,
         TransactionPlan calldata plan
     ) internal returns (bool) {
-        // Pre-execution validation through Safe Guard
-        require(safeGuard.validatePreExecution(plan), "Pre-execution validation failed");
-        
-        // Execute transaction steps
         bool success = true;
         for (uint256 i = 0; i < plan.actionSteps.length; i++) {
-            // Implementation of transaction execution logic
-            // This would interact with the Safe core through the Module Manager
+            ActionStep memory step = plan.actionSteps[i];
+            success = safe.execTransactionFromModule(
+                step.to,
+                step.value,
+                step.data,
+                Enum.Operation.Call
+            );
+            require(success, "Transaction execution failed");
         }
-        
-        // Post-execution state update
-        if (success) {
-            safeGuard.reportPostExecution(transactionId);
-        }
-        
+
         emit TransactionExecuted(transactionId, success);
         return success;
     }
-    
-    function updateWhitelist(
-        address strategist,
-        bool status
-    ) external onlyOwner {
+
+    /**
+     * @dev Update the whitelist status of a strategist
+     * @param strategist Address of the strategist
+     * @param status New whitelist status
+     */
+    function updateWhitelist(address strategist, bool status) external onlyOwner {
+        require(whitelistedStrategists[strategist] != status, "No change in whitelist status");
         whitelistedStrategists[strategist] = status;
         emit WhitelistUpdated(strategist, status);
-    }
-    
-    function routeWhitelistUpdates(
-        WhitelistChanges calldata changes
-    ) external onlyOwner {
-        // Forward updates to Safe Modifier and Safe Guard
-        // Implementation of whitelist update routing
     }
 } 
